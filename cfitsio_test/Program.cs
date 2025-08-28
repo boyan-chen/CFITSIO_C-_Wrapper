@@ -10,7 +10,7 @@ class Program
         //MakeRowImage("row_increasing.fits");
         //MakeColumnImage("col_increasing.fits");
         //Console.WriteLine("FITS files created!");
-        Mat img = Cv2.ImRead("testImage1.png", ImreadModes.Grayscale);
+        Mat img = Cv2.ImRead("test_image.png", ImreadModes.Grayscale);
 
         Stopwatch sw = new Stopwatch();
         sw.Start();

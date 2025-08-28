@@ -12,8 +12,12 @@ class Program
         //Console.WriteLine("FITS files created!");
         Mat img = Cv2.ImRead("test_image.png", ImreadModes.Grayscale);
 
+        Mat mat16 = new Mat(img.Size(), MatType.CV_16UC1, Scalar.All(0)); // Create a 16-bit image with the same size
+        img.ConvertTo(mat16, MatType.CV_16UC1, 32767.0 / 256.0); // Convert the 8-bit image to 16-bit
+
         Stopwatch sw = new Stopwatch();
         sw.Start();
+        /*
         SaveMatAsFits(
             img,
             "testOutput.fits",
@@ -22,8 +26,122 @@ class Program
             exposure: 120.0,
             gain: 1.5
         );
+        */
+        SaveFits16bit("testOutput16.fits",
+            mat16,
+            telescope: "C11",
+            exposureTime: 0.5,
+            gain: 240,
+            binX: 2,
+            binY: 2,
+            img_ts: DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            satname: "ISS",
+            tle1: "1 20580U 90037B   24075.12345678  .00000023  00000+0  12345-4 0  9991",
+            tle2: "2 20580  28.4696 123.4567 0001234 234.5678 345.6789 15.12345678901234"
+        );
         sw.Stop();
         Console.WriteLine($"Time taken: {sw.Elapsed.TotalMilliseconds} ms");
+    }
+
+    public static void SaveFits16bit(string filePath, Mat mat, string telescope, double exposureTime,
+                                                        double gain, int binX, int binY, long img_ts, string satname, string tle1, string tle2)
+    {
+        if (mat.Empty())
+            throw new ArgumentException("Mat is empty.");
+        if (mat.Channels() != 1)
+            throw new ArgumentException("Only single-channel grayscale Mats are supported.");
+
+        int width = mat.Cols;
+        int height = mat.Rows;
+
+        IntPtr fptr = IntPtr.Zero;
+        int status = 0;
+
+        Cfitsio.fits_create_file(ref fptr, "!" + filePath, ref status);
+        Console.WriteLine($"Creating FITS file: {filePath}");
+        CheckStatus(status);
+
+        int[] naxes = new int[] { width, height };
+        Cfitsio.fits_create_img(fptr, Cfitsio.SHORT_IMG, 2, naxes, ref status);
+        Console.WriteLine($"Created FITS image with dimensions: {width}x{height}");
+        CheckStatus(status);
+        /*
+        ushort[] data_16bit = new ushort[width * height];
+        unsafe
+        {
+            ushort* p = (ushort*)mat.DataPointer;
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    data_16bit[y * width + x] = *(p + y * (mat.Step() / 2) + x);
+                }
+            }
+        }
+        */
+
+        // 將 ushort[] 改為 short[]
+        short[] data_16bit = new short[width * height];
+        unsafe
+        {
+            ushort* p = (ushort*)mat.DataPointer;
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    // 將 ushort 轉成 short，並限制在 short 範圍
+                    ushort val = *(p + y * (mat.Step() / 2) + x);
+                    data_16bit[y * width + x] = (short)Math.Min(val, short.MaxValue);
+                }
+            }
+        }
+
+        GCHandle handle = GCHandle.Alloc(data_16bit, GCHandleType.Pinned);
+        try
+        {
+            IntPtr ptr = handle.AddrOfPinnedObject();
+            Cfitsio.fits_write_img(fptr, Cfitsio.TSHORT, 1, width * height, ptr, ref status);
+            Console.WriteLine("Wrote image data to FITS file.");
+            CheckStatus(status);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        Console.WriteLine("Adding FITS header keywords...");
+
+        // Add FITS header keywords
+        Cfitsio.fits_update_key_str(fptr, "TELESCOP", telescope, "Telescope used", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_dbl(fptr, "EXPTIME", exposureTime, 2, "Exposure time (s)", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_dbl(fptr, "GAIN", gain, 2, "Camera gain", ref status);
+        CheckStatus(status);
+        //Cfitsio.fits_update_key_dbl(fptr, "BITPIX", Cfitsio.SHORT_IMG, 0, "Number of bits per pixel (16)", ref status);
+        //CheckStatus(status);
+        //Cfitsio.fits_update_key_dbl(fptr, "NAXIS1", width, 0, "Image width", ref status);
+        //CheckStatus(status);
+        //Cfitsio.fits_update_key_dbl(fptr, "NAXIS2", height, 0, "Image height", ref status);
+        //CheckStatus(status);
+        Cfitsio.fits_update_key_dbl(fptr, "XBINNING", binX, 0, "Binning factor in X", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_dbl(fptr, "YBINNING", binY, 0, "Binning factor in Y", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_str(fptr, "BINNING", $"{binX}x{binY}", "Binning", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_str(fptr, "DATE-OBS", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss"), "UTC date/time of observation", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_str(fptr, "SATNAME", satname, "Satellite name", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_str(fptr, "TLE1", tle1, "Satellite TLE line 1", ref status);
+        CheckStatus(status);
+        Cfitsio.fits_update_key_str(fptr, "TLE2", tle2, "Satellite TLE line 2", ref status);
+        CheckStatus(status);
+
+        Cfitsio.fits_close_file(fptr, ref status);
+        Console.WriteLine("Closed FITS file.");
+        CheckStatus(status);
     }
 
     public static void SaveMatAsFits(
